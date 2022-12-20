@@ -10,6 +10,12 @@ Dependencies
 - [MEOS (latest version of the develop branch of MobilityDB)](https://www.libmeos.org/)
 - [ME-GiST](https://github.com/mschoema/megist)
 
+You should also set the following in postgresql.conf depending on the version of PostGIS and MobilityDB you have installed (below we use PostGIS 3, MobilityDB 1.1):
+
+```
+shared_preload_libraries = 'postgis-3,libMobilityDB-1.1'
+```
+
 Installation
 ------------
 Compiling and installing the extension
@@ -20,6 +26,7 @@ sudo make install
 
 Using the extension to create a Multi-Entry R-Tree on the tgeompoint column `trip` from the table `trips(id, trip)`
 ```sql
+CREATE EXTENSION megist_mobilitydb CASCADE;
 CREATE INDEX trips_megist_trip on trips using megist(trip);
 ```
 
