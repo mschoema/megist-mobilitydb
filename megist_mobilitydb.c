@@ -47,27 +47,27 @@ Tpoint_megist_compress(PG_FUNCTION_ARGS)
  * ME-GiST extract methods
  *****************************************************************************/
 
-static STBOX **
+static STBox **
 tinstant_split(TInstant *inst, int32 *count)
 {
-  STBOX **result = palloc(sizeof(STBOX *));
-  result[0] = palloc(sizeof(STBOX));
+  STBox **result = palloc(sizeof(STBox *));
+  result[0] = palloc(sizeof(STBox));
   tinstant_set_bbox(inst, result[0]);
   *count = 1;
   return result;
 }
 
-static STBOX **
+static STBox **
 tsequence_split(TSequence *seq, int32 *count)
 {
-  STBOX **result;
-  STBOX box1;
+  STBox **result;
+  STBox box1;
   int segs_per_split, segs_this_split, k;
 
   if (seq->count <= 1)
   {
-    result = palloc(sizeof(STBOX *));
-    result[0] = palloc(sizeof(STBOX));
+    result = palloc(sizeof(STBox *));
+    result[0] = palloc(sizeof(STBox));
     tsequence_set_bbox(seq, result[0]);
     *count = 1;
     return result;
@@ -78,13 +78,13 @@ tsequence_split(TSequence *seq, int32 *count)
     *count = ceil((double) (seq->count - 1) / (double) segs_per_split);
 
   k = 0;
-  result = palloc(sizeof(STBOX *) * (*count));
+  result = palloc(sizeof(STBox *) * (*count));
   for (int i = 0; i < seq->count - 1; i += segs_per_split)
   {
     segs_this_split = segs_per_split;
     if (seq->count - 1 - i < segs_per_split)
       segs_this_split = seq->count - 1 - i;
-    result[k] = palloc(sizeof(STBOX));
+    result[k] = palloc(sizeof(STBox));
     tinstant_set_bbox(tsequence_inst_n(seq, i), result[k]);
     for (int j = 1; j < segs_this_split + 1; j++)
     {
@@ -96,27 +96,28 @@ tsequence_split(TSequence *seq, int32 *count)
   return result;
 }
 
-static STBOX **
+static STBox **
 tsequenceset_split(TSequenceSet *ss, int32 *count)
 {
-  STBOX **result = palloc(sizeof(STBOX *));
-  result[0] = palloc(sizeof(STBOX));
+  STBox **result = palloc(sizeof(STBox *));
+  result[0] = palloc(sizeof(STBox));
   tsequenceset_set_bbox(ss, result[0]);
   *count = 1;
   return result;
 }
 
-static STBOX **
+static STBox **
 tpoint_split(Temporal *temp, int32 *count)
 {
-  STBOX **result;
-  ensure_valid_tempsubtype(temp->subtype);
+  STBox **result;
   if (temp->subtype == TINSTANT)
     result = tinstant_split((TInstant *) temp, count);
   else if (temp->subtype == TSEQUENCE)
     result = tsequence_split((TSequence *) temp, count);
-  else // temp->subtype == TSEQUENCESET
+  else if (temp->subtype == TSEQUENCESET)
     result = tsequenceset_split((TSequenceSet *) temp, count);
+  else
+    elog(ERROR, "unknown subtype for temporal type: %d", temp->subtype);
   return result;
 }
 
@@ -131,7 +132,7 @@ Tpoint_megist_extract(PG_FUNCTION_ARGS)
   int32    *nkeys = (int32 *) PG_GETARG_POINTER(1);
   // bool   **nullFlags = (bool **) PG_GETARG_POINTER(2);
 
-  STBOX **boxes;
+  STBox **boxes;
   Datum *keys;
   int i;
 
