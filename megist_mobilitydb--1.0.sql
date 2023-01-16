@@ -9,16 +9,16 @@ CREATE FUNCTION tpoint_megist_compress(internal)
   RETURNS internal
   AS 'MODULE_PATHNAME', 'Tpoint_megist_compress'
   LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-CREATE FUNCTION tpoint_megist_extract(internal, internal, internal)
+CREATE FUNCTION tpoint_megist_equisplit(internal, internal, internal)
   RETURNS internal
-  AS 'MODULE_PATHNAME', 'Tpoint_megist_extract'
+  AS 'MODULE_PATHNAME', 'Tpoint_megist_equisplit'
   LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 CREATE FUNCTION tpoint_megist_options(internal)
   RETURNS void
   AS 'MODULE_PATHNAME', 'Tpoint_megist_options'
   LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE OPERATOR CLASS megist_tgeompoint_ops
+CREATE OPERATOR CLASS megist_tpoint_equisplit_ops
   DEFAULT FOR TYPE tgeompoint USING MEGIST AS
   STORAGE stbox,
   -- overlaps
@@ -37,6 +37,6 @@ CREATE OPERATOR CLASS megist_tgeompoint_ops
   FUNCTION  6  stbox_gist_picksplit(internal, internal),
   FUNCTION  7  stbox_gist_same(stbox, stbox, internal),
   FUNCTION  10 tpoint_megist_options(internal),
-  FUNCTION  12 tpoint_megist_extract(internal, internal, internal);
+  FUNCTION  12 tpoint_megist_equisplit(internal, internal, internal);
 
 /******************************************************************************/
