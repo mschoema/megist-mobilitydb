@@ -9,6 +9,7 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "access/gist.h"
+#include "access/reloptions.h"
 #include "utils/timestamp.h"
 #include "utils/datetime.h"
 #include "utils/date.h"
@@ -28,6 +29,20 @@ PG_MODULE_MAGIC;
 
 #define PG_GETARG_TEMPORAL_P(X)    ((Temporal *) PG_GETARG_VARLENA_P(X))
 
+/* number boxes for extract function */
+#define MEGIST_EXTRACT_BOXES_DEFAULT    10
+#define MEGIST_EXTRACT_BOXES_MAX        1000
+#define MEGIST_EXTRACT_GET_BOXES()   (PG_HAS_OPCLASS_OPTIONS() ? \
+          ((MEGISTOptions *) PG_GET_OPCLASS_OPTIONS())->num_boxes : \
+          MEGIST_EXTRACT_BOXES_DEFAULT)
+
+/* gist_int_ops opclass options */
+typedef struct
+{
+  int32   vl_len_;    /* varlena header (do not touch directly!) */
+  int     num_boxes;   /* number of ranges */
+} MEGISTOptions;
+
 /*****************************************************************************
  * ME-GiST extract methods
  *****************************************************************************/
@@ -41,6 +56,24 @@ Tpoint_megist_compress(PG_FUNCTION_ARGS)
 {
   GISTENTRY *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
   PG_RETURN_POINTER(entry);
+}
+
+PG_FUNCTION_INFO_V1(Tpoint_megist_options);
+/**
+ * ME-GiST options for temporal points
+ */
+PGDLLEXPORT Datum
+Tpoint_megist_options(PG_FUNCTION_ARGS)
+{
+  local_relopts *relopts = (local_relopts *) PG_GETARG_POINTER(0);
+
+  init_local_reloptions(relopts, sizeof(MEGISTOptions));
+  add_local_int_reloption(relopts, "k",
+              "number of boxes for extract method",
+              MEGIST_EXTRACT_BOXES_DEFAULT, 1, MEGIST_EXTRACT_BOXES_MAX,
+              offsetof(MEGISTOptions, num_boxes));
+
+  PG_RETURN_VOID();
 }
 
 /*****************************************************************************
@@ -136,7 +169,7 @@ Tpoint_megist_extract(PG_FUNCTION_ARGS)
   Datum *keys;
   int i;
 
-  *nkeys = 20;
+  *nkeys = MEGIST_EXTRACT_GET_BOXES();
   boxes = tpoint_split(temp, nkeys);
   keys = palloc(sizeof(Datum) * (*nkeys));
   for (i = 0; i < *nkeys; ++i)
