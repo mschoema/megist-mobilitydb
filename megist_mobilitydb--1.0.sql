@@ -30,6 +30,9 @@ CREATE OPERATOR CLASS megist_tpoint_equisplit_ops
   OPERATOR  3    && (tgeompoint, tstzspan),
   OPERATOR  3    && (tgeompoint, stbox),
   OPERATOR  3    && (tgeompoint, tgeompoint),
+  -- nearest approach distance
+  OPERATOR  25    |=| (tgeompoint, stbox) FOR ORDER BY pg_catalog.float_ops,
+  OPERATOR  25    |=| (tgeompoint, tgeompoint) FOR ORDER BY pg_catalog.float_ops,
   -- functions
   FUNCTION  1  gist_tgeompoint_consistent(internal, tgeompoint, smallint, oid, internal),
   FUNCTION  2  stbox_gist_union(internal, internal),
@@ -37,6 +40,7 @@ CREATE OPERATOR CLASS megist_tpoint_equisplit_ops
   FUNCTION  5  stbox_gist_penalty(internal, internal, internal),
   FUNCTION  6  stbox_gist_picksplit(internal, internal),
   FUNCTION  7  stbox_gist_same(stbox, stbox, internal),
+  FUNCTION  8  stbox_gist_distance(internal, stbox, smallint, oid, internal),
   FUNCTION  10 tpoint_megist_options(internal),
   FUNCTION  12 tpoint_megist_equisplit(internal, internal, internal);
 
@@ -56,6 +60,9 @@ CREATE OPERATOR CLASS megist_tpoint_mergesplit_ops
   OPERATOR  3    && (tgeompoint, tstzspan),
   OPERATOR  3    && (tgeompoint, stbox),
   OPERATOR  3    && (tgeompoint, tgeompoint),
+  -- nearest approach distance
+  OPERATOR  25    |=| (tgeompoint, stbox) FOR ORDER BY pg_catalog.float_ops,
+  OPERATOR  25    |=| (tgeompoint, tgeompoint) FOR ORDER BY pg_catalog.float_ops,
   -- functions
   FUNCTION  1  gist_tgeompoint_consistent(internal, tgeompoint, smallint, oid, internal),
   FUNCTION  2  stbox_gist_union(internal, internal),
@@ -63,6 +70,7 @@ CREATE OPERATOR CLASS megist_tpoint_mergesplit_ops
   FUNCTION  5  stbox_gist_penalty(internal, internal, internal),
   FUNCTION  6  stbox_gist_picksplit(internal, internal),
   FUNCTION  7  stbox_gist_same(stbox, stbox, internal),
+  FUNCTION  8  stbox_gist_distance(internal, stbox, smallint, oid, internal),
   FUNCTION  10 tpoint_megist_options(internal),
   FUNCTION  12 tpoint_megist_mergesplit(internal, internal, internal);
 
