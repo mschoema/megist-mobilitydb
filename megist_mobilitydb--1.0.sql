@@ -22,11 +22,7 @@ CREATE OPERATOR CLASS megist_tgeompoint_ops
   DEFAULT FOR TYPE tgeompoint USING MEGIST AS
   STORAGE stbox,
   -- overlaps
-  OPERATOR  3    && (tgeompoint, timestamptz),
-  OPERATOR  3    && (tgeompoint, tstzset),
   OPERATOR  3    && (tgeompoint, tstzspan),
-  OPERATOR  3    && (tgeompoint, tstzspanset),
-  OPERATOR  3    && (tgeompoint, geometry),
   OPERATOR  3    && (tgeompoint, stbox),
   OPERATOR  3    && (tgeompoint, tgeompoint),
   -- functions
