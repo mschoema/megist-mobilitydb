@@ -7,6 +7,8 @@
  */
 
 #include <assert.h>
+#include <math.h>
+
 #include "postgres.h"
 #include "fmgr.h"
 #include "access/gist.h"
@@ -46,15 +48,43 @@ PG_MODULE_MAGIC;
 #define MEGIST_EXTRACT_BOXES_DEFAULT    5
 #define MEGIST_EXTRACT_BOXES_MAX        1000
 #define MEGIST_EXTRACT_GET_BOXES()   (PG_HAS_OPCLASS_OPTIONS() ? \
-          ((MEGISTOptions *) PG_GET_OPCLASS_OPTIONS())->num_boxes : \
+          ((MEGIST_BOXES_Options *) PG_GET_OPCLASS_OPTIONS())->num_boxes : \
           MEGIST_EXTRACT_BOXES_DEFAULT)
 
 /* gist_int_ops opclass options */
 typedef struct
 {
-  int32   vl_len_;    /* varlena header (do not touch directly!) */
-  int     num_boxes;   /* number of ranges */
-} MEGISTOptions;
+  int32   vl_len_;      /* varlena header (do not touch directly!) */
+  int     num_boxes;    /* number of ranges */
+} MEGIST_BOXES_Options;
+
+/* Average query width (in meters) */
+#define MEGIST_EXTRACT_QX_DEFAULT    1000
+#define MEGIST_EXTRACT_QX_MAX        1000
+#define MEGIST_EXTRACT_GET_QX()   (PG_HAS_OPCLASS_OPTIONS() ? \
+          ((MEGIST_QUERY_Options *) PG_GET_OPCLASS_OPTIONS())->qx : \
+          MEGIST_EXTRACT_QX_DEFAULT)
+
+/* Average query height (in meters) */
+#define MEGIST_EXTRACT_QY_DEFAULT    1000
+#define MEGIST_EXTRACT_QY_MAX        1000000
+#define MEGIST_EXTRACT_GET_QY()   (PG_HAS_OPCLASS_OPTIONS() ? \
+          ((MEGIST_QUERY_Options *) PG_GET_OPCLASS_OPTIONS())->qy : \
+          MEGIST_EXTRACT_QY_DEFAULT)
+
+/* Average query duration (in minutes) */
+#define MEGIST_EXTRACT_QT_DEFAULT    1000
+#define MEGIST_EXTRACT_QT_MAX        1000000
+#define MEGIST_EXTRACT_GET_QT()   (PG_HAS_OPCLASS_OPTIONS() ? \
+          ((MEGIST_QUERY_Options *) PG_GET_OPCLASS_OPTIONS())->qt : \
+          MEGIST_EXTRACT_QT_DEFAULT)
+
+/* gist_int_ops opclass options */
+typedef struct
+{
+  int32   vl_len_;      /* varlena header (do not touch directly!) */
+  double  qx, qy, qt;   /* avg query range width per dimension */
+} MEGIST_QUERY_Options;
 
 /* Enum for MergeSplit Algorithm */
 enum stbox_state {
@@ -80,20 +110,46 @@ Tpoint_megist_compress(PG_FUNCTION_ARGS)
   PG_RETURN_POINTER(entry);
 }
 
-PG_FUNCTION_INFO_V1(Tpoint_megist_options);
+PG_FUNCTION_INFO_V1(Tpoint_megist_box_options);
 /**
  * ME-GiST options for temporal points
  */
 PGDLLEXPORT Datum
-Tpoint_megist_options(PG_FUNCTION_ARGS)
+Tpoint_megist_box_options(PG_FUNCTION_ARGS)
 {
   local_relopts *relopts = (local_relopts *) PG_GETARG_POINTER(0);
 
-  init_local_reloptions(relopts, sizeof(MEGISTOptions));
+  init_local_reloptions(relopts, sizeof(MEGIST_BOXES_Options));
   add_local_int_reloption(relopts, "k",
               "number of boxes for extract method",
               MEGIST_EXTRACT_BOXES_DEFAULT, 1, MEGIST_EXTRACT_BOXES_MAX,
-              offsetof(MEGISTOptions, num_boxes));
+              offsetof(MEGIST_BOXES_Options, num_boxes));
+
+  PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(Tpoint_megist_query_options);
+/**
+ * ME-GiST options for temporal points
+ */
+PGDLLEXPORT Datum
+Tpoint_megist_query_options(PG_FUNCTION_ARGS)
+{
+  local_relopts *relopts = (local_relopts *) PG_GETARG_POINTER(0);
+
+  init_local_reloptions(relopts, sizeof(MEGIST_QUERY_Options));
+  add_local_int_reloption(relopts, "qx",
+              "Average query width (in meters)",
+              MEGIST_EXTRACT_QX_DEFAULT, 1, MEGIST_EXTRACT_QX_MAX,
+              offsetof(MEGIST_QUERY_Options, qx));
+  add_local_int_reloption(relopts, "qy",
+              "Average query height (in meters)",
+              MEGIST_EXTRACT_QY_DEFAULT, 1, MEGIST_EXTRACT_QY_MAX,
+              offsetof(MEGIST_QUERY_Options, qy));
+  add_local_int_reloption(relopts, "qt",
+              "Average query duration (in minutes)",
+              MEGIST_EXTRACT_QT_DEFAULT, 1, MEGIST_EXTRACT_QT_MAX,
+              offsetof(MEGIST_QUERY_Options, qt));
 
   PG_RETURN_VOID();
 }
@@ -349,7 +405,7 @@ stbox_size(const STBox *box)
   if (hast)
     /* Expressed in seconds */
     result_size *= (DatumGetTimestampTz(box->period.upper) - 
-      DatumGetTimestampTz(box->period.lower)) / USECS_PER_SEC;
+      DatumGetTimestampTz(box->period.lower)) / USECS_PER_MINUTE;
   return result_size;
 }
 
@@ -467,6 +523,140 @@ PGDLLEXPORT Datum
 Tpoint_megist_mergesplit(PG_FUNCTION_ARGS)
 {
   return tpoint_megist_extract(fcinfo, &tsequence_mergesplit);
+}
+
+/*****************************************************************************/
+
+/**
+ * Return the size of a spatiotemporal box for penalty-calculation purposes.
+ * The result can be +Infinity, but not NaN.
+ */
+static double
+stbox_size_ext(const STBox *box, int x, int y, int t)
+{
+  double result_size = 1;
+  bool  hasx = MOBDB_FLAGS_GET_X(box->flags),
+        hasz = MOBDB_FLAGS_GET_Z(box->flags),
+        hast = MOBDB_FLAGS_GET_T(box->flags);
+  /*
+   * Check for zero-width cases.  Note that we define the size of a zero-
+   * by-infinity box as zero.  It's important to special-case this somehow,
+   * as naively multiplying infinity by zero will produce NaN.
+   *
+   * The less-than cases should not happen, but if they do, say "zero".
+   */
+  if ((hasx && (FLOAT8_LE(box->xmax, box->xmin) 
+                || FLOAT8_LE(box->ymax, box->ymin) 
+                || (hasz && FLOAT8_LE(box->zmax, box->zmin))))
+      || (hast && (DatumGetTimestampTz(box->period.upper) 
+                    <= DatumGetTimestampTz(box->period.lower))))
+    return 0.0;
+
+  /*
+   * We treat NaN as larger than +Infinity, so any distance involving a NaN
+   * and a non-NaN is infinite.  Note the previous check eliminated the
+   * possibility that the low fields are NaNs.
+   */
+  if (hasx && (isnan(box->xmax) || isnan(box->ymax) || (hasz && isnan(box->zmax))))
+    return get_float8_infinity();
+
+  /*
+   * Compute the box size
+   */
+  if (hasx)
+  {
+    result_size *= (x + box->xmax - box->xmin) * (y + box->ymax - box->ymin);
+    if (hasz)
+      result_size *= (box->zmax - box->zmin);
+  }
+  if (hast)
+    /* Expressed in seconds */
+    result_size *= t + ((DatumGetTimestampTz(box->period.upper) - 
+      DatumGetTimestampTz(box->period.lower)) / USECS_PER_MINUTE);
+  return result_size;
+}
+
+/**
+ * Return the amount by which the union of the two boxes is larger than
+ * the original STBox's volume.  The result can be +Infinity, but not NaN.
+ */
+static double
+stbox_penalty_ext(const STBox *box1, const STBox *box2, int x, int y, int t)
+{
+  STBox unionbox;
+  memcpy(&unionbox, box1, sizeof(STBox));
+  stbox_expand(box2, &unionbox);
+  return stbox_size_ext(&unionbox, x, y, t) 
+         - stbox_size_ext(box1, x, y, t) 
+         - stbox_size_ext(box2, x, y, t);
+}
+
+static double
+solve_c(STBox *box, int num_segs, 
+  double qx, double qy, double qt)
+{
+  return 1;
+}
+
+static STBox *
+tsequence_linearsplit(FunctionCallInfo fcinfo, const TSequence *seq, int32 *nkeys)
+{
+  STBox *result, *boxes = palloc(sizeof(STBox)*(seq->count-1));
+  STBox box1, box2;
+  int32 count = 0;
+  double  qx = MEGIST_EXTRACT_GET_QX(),
+          qy = MEGIST_EXTRACT_GET_QY(),
+          qt = MEGIST_EXTRACT_GET_QT();
+  int i, k, c, u = 0, v = 1;
+
+  tinstant_set_bbox(tsequence_inst_n(seq, u), &box1);
+  tinstant_set_bbox(tsequence_inst_n(seq, v), &box2);
+  stbox_expand(&box2, &box1);
+
+  while (v < seq->count - 1)
+  {
+    tinstant_set_bbox(tsequence_inst_n(seq, v + 1), &box2);
+    if (stbox_penalty_ext(&box1, &box2, qx, qy, qt) > 0)
+    {
+      k = 0;
+      c = round(solve_c(&box1, v - u, qx, qy, qt));
+      tinstant_set_bbox(tsequence_inst_n(seq, u), &box1);
+      for (i = 1; i < v - u + 1; ++i)
+      {
+        tinstant_set_bbox(tsequence_inst_n(seq, u + i), &box2);
+        stbox_expand(&box2, &box1);
+        if (i % c == 0)
+        {
+          boxes[count++] = box1;
+          box1 = box2;
+          k++;
+        }
+      }
+      u += k*c;
+    }
+    stbox_expand(&box2, &box1);
+    v++;
+  }
+
+  if (u < seq->count - 1)
+    boxes[count++] = box1;
+
+  result = palloc(sizeof(STBox) * count);
+  for (i = 0; i < count; ++i)
+    result[i] = boxes[i];
+  pfree(boxes);
+  *nkeys = count;
+  return result;
+}
+
+PG_FUNCTION_INFO_V1(Tpoint_megist_linearsplit);
+/**
+ * ME-GiST extract methods for temporal points
+ */
+PGDLLEXPORT Datum
+Tpoint_megist_linearsplit(PG_FUNCTION_ARGS)
+{
+  return tpoint_megist_extract(fcinfo, &tsequence_linearsplit);
 }
 
 /*****************************************************************************/
