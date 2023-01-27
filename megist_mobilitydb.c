@@ -699,3 +699,39 @@ Tpoint_megist_linearsplit(PG_FUNCTION_ARGS)
 }
 
 /*****************************************************************************/
+
+/* Manualsplit */
+
+static STBox *
+tsequence_manualsplit(FunctionCallInfo fcinfo, const TSequence *seq, int32 *nkeys)
+{
+  STBox *result;
+  STBox box1;
+  int i, k = 0, segs_per_split = MEGIST_EXTRACT_GET_BOXES();
+  int32 count = ceil((double) (seq->count - 1) / (double) segs_per_split);
+
+  result = palloc(sizeof(STBox) * count);
+  tinstant_set_bbox(tsequence_inst_n(seq, 0), &result[k]);
+  for (i = 1; i < seq->count; ++i)
+  {
+    tinstant_set_bbox(tsequence_inst_n(seq, i), &box1);
+    stbox_expand(&box1, &result[k]);
+    if ((i % segs_per_split == 0) && (i < seq->count - 1))
+      result[++k] = box1;
+  }
+  assert(k + 1 == count);
+  *nkeys = count;
+  return result;
+}
+
+PG_FUNCTION_INFO_V1(Tpoint_megist_manualsplit);
+/**
+ * ME-GiST extract methods for temporal points
+ */
+PGDLLEXPORT Datum
+Tpoint_megist_manualsplit(PG_FUNCTION_ARGS)
+{
+  return tpoint_megist_extract(fcinfo, &tsequence_manualsplit);
+}
+
+/*****************************************************************************/
