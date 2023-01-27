@@ -12,7 +12,7 @@ CREATE FUNCTION tpoint_megist_compress(internal)
 
 CREATE FUNCTION tpoint_megist_box_options(internal)
   RETURNS void
-  AS 'MODULE_PATHNAME', 'Tpoint_megist_options'
+  AS 'MODULE_PATHNAME', 'Tpoint_megist_box_options'
   LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 CREATE FUNCTION tpoint_megist_query_options(internal)

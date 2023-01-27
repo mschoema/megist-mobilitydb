@@ -59,22 +59,22 @@ typedef struct
 } MEGIST_BOXES_Options;
 
 /* Average query width (in meters) */
-#define MEGIST_EXTRACT_QX_DEFAULT    1000
-#define MEGIST_EXTRACT_QX_MAX        1000
+#define MEGIST_EXTRACT_QX_DEFAULT    1000.0
+#define MEGIST_EXTRACT_QX_MAX        1000000.0
 #define MEGIST_EXTRACT_GET_QX()   (PG_HAS_OPCLASS_OPTIONS() ? \
           ((MEGIST_QUERY_Options *) PG_GET_OPCLASS_OPTIONS())->qx : \
           MEGIST_EXTRACT_QX_DEFAULT)
 
 /* Average query height (in meters) */
-#define MEGIST_EXTRACT_QY_DEFAULT    1000
-#define MEGIST_EXTRACT_QY_MAX        1000000
+#define MEGIST_EXTRACT_QY_DEFAULT    1000.0
+#define MEGIST_EXTRACT_QY_MAX        1000000.0
 #define MEGIST_EXTRACT_GET_QY()   (PG_HAS_OPCLASS_OPTIONS() ? \
           ((MEGIST_QUERY_Options *) PG_GET_OPCLASS_OPTIONS())->qy : \
           MEGIST_EXTRACT_QY_DEFAULT)
 
 /* Average query duration (in minutes) */
-#define MEGIST_EXTRACT_QT_DEFAULT    1000
-#define MEGIST_EXTRACT_QT_MAX        1000000
+#define MEGIST_EXTRACT_QT_DEFAULT    1000.0
+#define MEGIST_EXTRACT_QT_MAX        1000000.0
 #define MEGIST_EXTRACT_GET_QT()   (PG_HAS_OPCLASS_OPTIONS() ? \
           ((MEGIST_QUERY_Options *) PG_GET_OPCLASS_OPTIONS())->qt : \
           MEGIST_EXTRACT_QT_DEFAULT)
@@ -138,15 +138,15 @@ Tpoint_megist_query_options(PG_FUNCTION_ARGS)
   local_relopts *relopts = (local_relopts *) PG_GETARG_POINTER(0);
 
   init_local_reloptions(relopts, sizeof(MEGIST_QUERY_Options));
-  add_local_int_reloption(relopts, "qx",
+  add_local_real_reloption(relopts, "qx",
               "Average query width (in meters)",
               MEGIST_EXTRACT_QX_DEFAULT, 1, MEGIST_EXTRACT_QX_MAX,
               offsetof(MEGIST_QUERY_Options, qx));
-  add_local_int_reloption(relopts, "qy",
+  add_local_real_reloption(relopts, "qy",
               "Average query height (in meters)",
               MEGIST_EXTRACT_QY_DEFAULT, 1, MEGIST_EXTRACT_QY_MAX,
               offsetof(MEGIST_QUERY_Options, qy));
-  add_local_int_reloption(relopts, "qt",
+  add_local_real_reloption(relopts, "qt",
               "Average query duration (in minutes)",
               MEGIST_EXTRACT_QT_DEFAULT, 1, MEGIST_EXTRACT_QT_MAX,
               offsetof(MEGIST_QUERY_Options, qt));
@@ -527,17 +527,20 @@ Tpoint_megist_mergesplit(PG_FUNCTION_ARGS)
 
 /*****************************************************************************/
 
+/* Linearsplit */
+
 /**
  * Return the size of a spatiotemporal box for penalty-calculation purposes.
  * The result can be +Infinity, but not NaN.
  */
 static double
-stbox_size_ext(const STBox *box, int x, int y, int t)
+stbox_size_ext(const STBox *box, int qx, int qy, int qt)
 {
   double result_size = 1;
   bool  hasx = MOBDB_FLAGS_GET_X(box->flags),
         hasz = MOBDB_FLAGS_GET_Z(box->flags),
         hast = MOBDB_FLAGS_GET_T(box->flags);
+
   /*
    * Check for zero-width cases.  Note that we define the size of a zero-
    * by-infinity box as zero.  It's important to special-case this somehow,
@@ -545,8 +548,8 @@ stbox_size_ext(const STBox *box, int x, int y, int t)
    *
    * The less-than cases should not happen, but if they do, say "zero".
    */
-  if ((hasx && (FLOAT8_LE(box->xmax, box->xmin) 
-                || FLOAT8_LE(box->ymax, box->ymin) 
+  if ((hasx && (FLOAT8_LE(qx + box->xmax, box->xmin) 
+                || FLOAT8_LE(qy + box->ymax, box->ymin) 
                 || (hasz && FLOAT8_LE(box->zmax, box->zmin))))
       || (hast && (DatumGetTimestampTz(box->period.upper) 
                     <= DatumGetTimestampTz(box->period.lower))))
@@ -565,13 +568,13 @@ stbox_size_ext(const STBox *box, int x, int y, int t)
    */
   if (hasx)
   {
-    result_size *= (x + box->xmax - box->xmin) * (y + box->ymax - box->ymin);
+    result_size *= (qx + box->xmax - box->xmin) * (qy + box->ymax - box->ymin);
     if (hasz)
       result_size *= (box->zmax - box->zmin);
   }
   if (hast)
     /* Expressed in seconds */
-    result_size *= t + ((DatumGetTimestampTz(box->period.upper) - 
+    result_size *= qt + ((DatumGetTimestampTz(box->period.upper) - 
       DatumGetTimestampTz(box->period.lower)) / USECS_PER_MINUTE);
   return result_size;
 }
@@ -581,28 +584,62 @@ stbox_size_ext(const STBox *box, int x, int y, int t)
  * the original STBox's volume.  The result can be +Infinity, but not NaN.
  */
 static double
-stbox_penalty_ext(const STBox *box1, const STBox *box2, int x, int y, int t)
+stbox_penalty_ext(const STBox *box1, const STBox *box2, 
+  int qx, int qy, int qt)
 {
   STBox unionbox;
+  double a, b, c;
   memcpy(&unionbox, box1, sizeof(STBox));
   stbox_expand(box2, &unionbox);
-  return stbox_size_ext(&unionbox, x, y, t) 
-         - stbox_size_ext(box1, x, y, t) 
-         - stbox_size_ext(box2, x, y, t);
+  a = stbox_size_ext(&unionbox, qx, qy, qt);
+  b = stbox_size_ext(box1, qx, qy, qt);
+  c = stbox_size_ext(box2, qx, qy, qt);
+  return a - b - c;
 }
 
 static double
 solve_c(STBox *box, int num_segs, 
   double qx, double qy, double qt)
 {
-  return 1;
+  double  bx, by, bt,
+          qbx, qby, qbt,
+          b, p, q, d, s, t;
+
+  bx = (box->xmax - box->xmin) / (double) num_segs;
+  by = (box->ymax - box->ymin) / (double) num_segs;
+  bt = ((double)(DatumGetTimestampTz(box->period.upper) - 
+    DatumGetTimestampTz(box->period.lower))) 
+    / (USECS_PER_MINUTE * num_segs);
+
+  qbx = qx / bx;
+  qby = qy / by;
+  qbt = qt / bt;
+  b = 0.5 * (qbx + qby + qbt) / 3;
+  p = b * b;
+  q = 0.25 * qbx * qby * qbt - b * p;
+  d = q * q - p * p * p;
+  if (d >= 0)
+  {
+    double u1, u2;
+    s = sqrt(d);
+    u1 = q + s;
+    u2 = q - s;
+    t = cbrt(u1) + cbrt(u2) - b;
+  }
+  else
+  {
+    s = sqrt(p);
+    t = 2 * s * cos(acos(q / (p *s)) / 3) - b;
+  }
+  assert(t > 0);
+  return t;
 }
 
 static STBox *
 tsequence_linearsplit(FunctionCallInfo fcinfo, const TSequence *seq, int32 *nkeys)
 {
   STBox *result, *boxes = palloc(sizeof(STBox)*(seq->count-1));
-  STBox box1, box2;
+  STBox box1, box2, newbox;
   int32 count = 0;
   double  qx = MEGIST_EXTRACT_GET_QX(),
           qy = MEGIST_EXTRACT_GET_QY(),
@@ -615,7 +652,8 @@ tsequence_linearsplit(FunctionCallInfo fcinfo, const TSequence *seq, int32 *nkey
 
   while (v < seq->count - 1)
   {
-    tinstant_set_bbox(tsequence_inst_n(seq, v + 1), &box2);
+    tinstant_set_bbox(tsequence_inst_n(seq, v + 1), &newbox);
+    stbox_expand(&newbox, &box2);
     if (stbox_penalty_ext(&box1, &box2, qx, qy, qt) > 0)
     {
       k = 0;
@@ -634,7 +672,8 @@ tsequence_linearsplit(FunctionCallInfo fcinfo, const TSequence *seq, int32 *nkey
       }
       u += k*c;
     }
-    stbox_expand(&box2, &box1);
+    stbox_expand(&newbox, &box1);
+    box2 = newbox;
     v++;
   }
 
