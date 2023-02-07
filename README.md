@@ -1,3 +1,5 @@
+### NOTE: This extension has been merged with [megist](https://github.com/mschoema/megist) and the repository has thus been archived.
+
 ME-GiST Indexing for MobilityDB
 ===============================
 
